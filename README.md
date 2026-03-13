@@ -38,8 +38,19 @@
 ### 1) 启动后端（FastAPI）
 
 ```bash
---
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+说明：
+
+- 默认 `USE_MOCK_MODEL=true`，不配置 OpenAI Key 也可以先跑通本地流程
+- 如果要切到真实模型，把 `backend/.env` 里的 `USE_MOCK_MODEL=false`，并填写 `OPENAI_API_KEY`
+- 健康检查地址：`http://localhost:8000/api/v1/health`
 
 ### 2) 启动前端（Next.js）
 
