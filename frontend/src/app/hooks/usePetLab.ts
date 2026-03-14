@@ -123,58 +123,6 @@ export function usePetLab(apiBase: string) {
       chatTurns: typeof value === "function" ? (value as (prev: ChatTurn[]) => ChatTurn[])(pet.chatTurns) : value,
     }));
 
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("pet-brain-session");
-      if (saved) {
-        const data = JSON.parse(saved);
-        if (Array.isArray(data.petWorkspaces) && data.petWorkspaces.length > 0) {
-          const restoredPets: PetWorkspace[] = data.petWorkspaces.map((item: Partial<PetWorkspace>, idx: number) => {
-            const base = createEmptyPetWorkspace(idx + 1);
-            return {
-              ...base,
-              ...item,
-              id: typeof item.id === "string" && item.id ? item.id : base.id,
-              name: typeof item.name === "string" && item.name ? item.name : base.name,
-              loading: false,
-              chatSending: false,
-              error: typeof item.error === "string" ? item.error : "",
-              chatTurns: Array.isArray(item.chatTurns) ? item.chatTurns : [],
-            };
-          });
-          setPetWorkspaces(restoredPets);
-          const restoredActiveId =
-            typeof data.activePetId === "string" && restoredPets.some((pet) => pet.id === data.activePetId)
-              ? data.activePetId
-              : restoredPets[0].id;
-          setActivePetId(restoredActiveId);
-          return;
-        }
-
-        const legacyPet = createEmptyPetWorkspace(1);
-        legacyPet.name = "宠物 1";
-        if (typeof data.chatLog === "string") legacyPet.chatLog = data.chatLog;
-        if (typeof data.relationshipContext === "string") legacyPet.relationshipContext = data.relationshipContext;
-        if (typeof data.userPreference === "string") legacyPet.userPreference = data.userPreference;
-        if (typeof data.hatchGoal === "string") legacyPet.hatchGoal = data.hatchGoal;
-        if (typeof data.learnChatLog === "string") legacyPet.learnChatLog = data.learnChatLog;
-        if (typeof data.learnGoal === "string") legacyPet.learnGoal = data.learnGoal;
-        if (typeof data.brainIdInput === "string") legacyPet.brainIdInput = data.brainIdInput;
-        if (data.result && typeof data.result === "object") legacyPet.result = data.result as HatchResponse;
-        if (Array.isArray(data.chatTurns)) legacyPet.chatTurns = data.chatTurns;
-        setPetWorkspaces([legacyPet]);
-        setActivePetId(legacyPet.id);
-      }
-    } catch (e) {
-      console.error("Failed to restore session:", e);
-    }
-  }, []);
-
-  useEffect(() => {
-    const sessionData = { activePetId, petWorkspaces };
-    localStorage.setItem("pet-brain-session", JSON.stringify(sessionData));
-  }, [activePetId, petWorkspaces]);
-
   function handleAddPetWorkspace() {
     setPetWorkspaces((prev) => {
       const nextIndex = prev.length + 1;
@@ -191,6 +139,42 @@ export function usePetLab(apiBase: string) {
       ...pet,
       name: normalized.length > 0 ? normalized : pet.name,
     }));
+  }
+
+  async function handleDeleteActivePet() {
+    if (!activePet) return;
+    const petToDelete = activePet;
+    if (!confirm(`确定要删除「${petToDelete.name}」吗？该宠物的大脑与对话数据将被删除。`)) {
+      return;
+    }
+
+    const brainId = (petToDelete.brainIdInput || petToDelete.result?.brain_id || "").trim();
+    if (brainId) {
+      try {
+        const res = await fetch(`${apiBase}/api/v1/brain/${encodeURIComponent(brainId)}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || `HTTP ${res.status}`);
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "未知错误";
+        updatePetById(petToDelete.id, (pet) => ({ ...pet, error: `删除宠物失败: ${message}` }));
+        return;
+      }
+    }
+
+    setPetWorkspaces((prev) => {
+      const filtered = prev.filter((pet) => pet.id !== petToDelete.id);
+      if (filtered.length === 0) {
+        const fallback = createEmptyPetWorkspace(1);
+        setActivePetId(fallback.id);
+        return [fallback];
+      }
+      setActivePetId(filtered[0].id);
+      return filtered;
+    });
   }
 
   const canSubmit = useMemo(() => chatLog.trim().length > 0 && !loading, [chatLog, loading]);
@@ -434,6 +418,7 @@ export function usePetLab(apiBase: string) {
     setBrainIdInput,
     setChatInput,
     handleAddPetWorkspace,
+    handleDeleteActivePet,
     handleRenameActivePet,
     handleHatch,
     handleLearn,

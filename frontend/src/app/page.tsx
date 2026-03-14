@@ -38,6 +38,7 @@ export default function Home() {
     setBrainIdInput,
     setChatInput,
     handleAddPetWorkspace,
+    handleDeleteActivePet,
     handleRenameActivePet,
     handleHatch,
     handleLearn,
@@ -57,6 +58,7 @@ export default function Home() {
         activePetId={activePet?.id ?? ""}
         activePetName={activePet?.name ?? ""}
         onAddPet={handleAddPetWorkspace}
+        onDeleteActivePet={handleDeleteActivePet}
         onSelectPet={setActivePetId}
         onRenameActivePet={handleRenameActivePet}
       />

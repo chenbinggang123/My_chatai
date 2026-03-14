@@ -5,6 +5,7 @@ type PetWorkspaceHeaderProps = {
   activePetId: string;
   activePetName: string;
   onAddPet: () => void;
+  onDeleteActivePet: () => void;
   onSelectPet: (petId: string) => void;
   onRenameActivePet: (name: string) => void;
 };
@@ -14,6 +15,7 @@ export function PetWorkspaceHeader({
   activePetId,
   activePetName,
   onAddPet,
+  onDeleteActivePet,
   onSelectPet,
   onRenameActivePet,
 }: PetWorkspaceHeaderProps) {
@@ -24,12 +26,20 @@ export function PetWorkspaceHeader({
           <p className="text-sm font-semibold text-slate-800">孵化列表</p>
           <p className="text-xs text-slate-500">可同时维护多个宠物，每个宠物都有独立孵化与学习状态。</p>
         </div>
-        <button
-          onClick={onAddPet}
-          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700"
-        >
-          + 新建宠物
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onDeleteActivePet}
+            className="rounded-xl border border-rose-300 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100"
+          >
+            删除当前宠物
+          </button>
+          <button
+            onClick={onAddPet}
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700"
+          >
+            + 新建宠物
+          </button>
+        </div>
       </div>
 
       <div className="mt-3 flex items-center gap-3">
