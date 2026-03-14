@@ -2,169 +2,312 @@
 # 宠物大脑孵化与学习后端 API 主入口
 # =============================================================================
 # 路由设计：
-# - POST /api/v1/hatch          孵化：首次导入聊天记录，生成宠物初始大脑
-# - POST /api/v1/learn          学习：对已有大脑增量学习，更新语言与里程碑
-# - GET  /api/v1/brain/{id}     读取：按 brain_id 获取当前完整大脑状态
-# - GET  /api/v1/health         健康检查
+# - POST /api/v1/hatch              孵化：首次导入聊天记录，生成宠物初始大脑
+# - POST /api/v1/learn              学习：对已有大脑增量学习，更新语言与里程碑
+# - GET  /api/v1/brain/{id}         读取：按 brain_id 获取当前完整大脑状态
+# - GET  /api/v1/chat-imports       查询：回溯历史聊天导入记录
+# - GET  /api/v1/health             健康检查
 # =============================================================================
 
 import os
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-# 数据模型（Pydantic 类）
-from app.schemas import BrainStateResponse, HatchRequest, HealthResponse, LearnRequest, LearnResponse
-# 业务逻辑服务
-from app.services.brain_builder import build_mock_brain_state  # Mock 生成器
-from app.services.cpp_bridge import extract_features           # C++ 文本特征提取
-from app.services.model_client import generate_brain_state     # 真实 LLM 调用
-from app.services.prompt_builder import build_hatch_prompt     # 拼接 Prompt
-from app.services.schema_validator import BrainStateValidationError, validate_brain_state  # JSON 校验
-from app.services.store import load_brain_state, save_brain_state, update_brain_state  # 数据持久化
+from app.api.chat import router as chat_router
+from app.schemas import (
+    BrainStateResponse,
+    ChatImportListResponse,
+    HatchRequest,
+    HealthResponse,
+    LearnRequest,
+    LearnResponse,
+)
+from app.services.cpp_bridge import extract_features
+from app.services.llm.model_client import generate_brain_state
+from app.services.llm.prompt_builder import build_hatch_prompt
+from app.services.llm.schema_validator import BrainStateValidationError, validate_brain_state
+from app.services.storage.chat_import_store import init_chat_import_store, query_chat_imports, save_chat_import
+from app.services.storage.conversation_store import init_conversation_store
+from app.services.storage.store import init_brain_store, load_brain_state, save_brain_state, update_brain_state
 
-# 初始化 FastAPI 应用
+# ---------------------------------------------------------------------------
+# 应用初始化
+# ---------------------------------------------------------------------------
+
 app = FastAPI(title="Pet Brain API", version="0.1.0")
 
-# 配置 CORS 中间件：允许前端跨域请求（开发环境允许所有来源，生产环境应该缩小范围）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许所有域名
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # 允许所有 HTTP 方法
-    allow_headers=["*"],  # 允许所有请求头
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
+app.include_router(chat_router)
+init_brain_store()
+init_chat_import_store()
+init_conversation_store()
+
+# ---------------------------------------------------------------------------
+# 内部工具函数
+# ---------------------------------------------------------------------------
+
+
+def _ensure_meta_dict(brain_state: dict) -> dict:
+    """确保 brain_state['meta'] 始终是 dict。"""
+    meta = brain_state.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+        brain_state["meta"] = meta
+    return meta
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    """安全解析 meta 中的整数字段，容忍类型异常。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _ensure_counter_dict(meta: dict, key: str) -> dict:
+    """确保 meta 中的计数字典存在且为 dict 类型。"""
+    value = meta.get(key)
+    if not isinstance(value, dict):
+        value = {}
+        meta[key] = value
+    return value
+
+
+def _save_chat_import_safely(**kwargs: object) -> None:
+    """尽力写入聊天导入记录；DB 异常不中断主流程。"""
+    try:
+        save_chat_import(**kwargs)
+    except Exception as exc:
+        print(f"[warn] failed to persist chat import: {exc}")
+
+
+_UNWANTED_TEXT_SNIPPETS = (
+    "C++ 高频特征",
+    "C++ 高频词组",
+    "当前样本未出现",
+    "低置信度",
+)
+
+
+def _sanitize_brain_state_text(value: object) -> object:
+    """Recursively remove unwanted wording from model output text fields."""
+    if isinstance(value, dict):
+        return {k: _sanitize_brain_state_text(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_brain_state_text(item) for item in value]
+    if isinstance(value, str):
+        text = value
+        for snippet in _UNWANTED_TEXT_SNIPPETS:
+            text = text.replace(snippet, "")
+        return " ".join(text.split())
+    return value
+
+# ---------------------------------------------------------------------------
+# 路由
+# ---------------------------------------------------------------------------
 
 
 @app.get("/api/v1/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    """健康检查端点：用于验证后端服务是否正常运行"""
+    """健康检查：确认服务正常运行。"""
     return HealthResponse(status="ok")
 
 
 @app.post("/api/v1/hatch", response_model=BrainStateResponse)
 def hatch(req: HatchRequest) -> BrainStateResponse:
     """
-    孵化端点：根据聊天记录首次生成宠物大脑
-    
+    孵化：根据聊天记录首次生成宠物大脑。
+
     流程：
-    1. 调用 C++ 模块提取文本特征（高频词、标点、句长等）
-    2. 根据 USE_MOCK_MODEL 环境变量选择生成模式：
-       - True:  使用 Mock 生成器（快速，用于开发）
-       - False: 调用真实 LLM（需要 OpenAI API Key）
-    3. 对 LLM 输出进行 Schema 校验
-    4. 如果 LLM 失败且 FALLBACK_TO_MOCK_ON_ERROR=true，自动回退到 Mock
-    5. 保存大脑状态到本地 JSON，返回 brain_id
+    1. C++ 模块提取文本特征（高频词、标点、句长等）
+    2. 调用大模型生成结构化 brain_state
+    3. 对模型输出做 Schema 校验
+    4. 保存大脑状态到 SQLite，返回 brain_id
+    5. 将原始聊天记录写入数据库
     """
-    # 1. C++ 模块提取文本特征（如高频短语、句子长度等）
     cpp_features = extract_features(req.chat_log, mode="hatch")
-    
-    # 2. 从环境变量读取模式控制开关
-    use_mock = os.getenv("USE_MOCK_MODEL", "true").lower() == "true"
-    fallback_to_mock = os.getenv("FALLBACK_TO_MOCK_ON_ERROR", "true").lower() == "true"
+    try:
+        prompt_text = build_hatch_prompt(req, cpp_features)
+        model_output = generate_brain_state(prompt_text)
+        brain_state = validate_brain_state(model_output)
+        meta = _ensure_meta_dict(brain_state)
+        meta["cpp_features"] = cpp_features
+    except BrainStateValidationError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid model output schema: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Model call failed: {exc}") from exc
 
-    # 3. 选择生成模式
-    if use_mock:
-        # Mock 模式：快速生成，不需要真实 LLM
-        brain_state = build_mock_brain_state(
-            chat_log=req.chat_log,
-            user_preference=req.user_preference,
-            cpp_features=cpp_features,
-        )
-    else:
-        # LLM 模式：调用真实大模型生成，带错误处理和回退
-        try:
-            # 3a. 拼接完整的 Prompt（融合输入 + C++ 特征）
-            prompt_text = build_hatch_prompt(req, cpp_features)
-            # 3b. 调用 LLM（OpenAI 兼容接口）
-            model_output = generate_brain_state(prompt_text)
-            # 3c. 校验返回的 JSON 是否符合 brain_state schema
-            brain_state = validate_brain_state(model_output)
-            # 3d. 标记为 LLM 模式，记录 C++ 特征
-            brain_state.setdefault("meta", {})
-            brain_state["meta"]["model_mode"] = "llm"
-            brain_state["meta"]["cpp_features"] = cpp_features
-        except BrainStateValidationError as exc:
-            # Schema 校验失败，返回 422 (Unprocessable Entity)
-            raise HTTPException(status_code=422, detail=f"Invalid model output schema: {exc}") from exc
-        except Exception as exc:
-            # LLM 调用其他错误（网络、超时等）
-            if not fallback_to_mock:
-                # 不回退，直接返回 500
-                raise HTTPException(status_code=500, detail=f"Model call failed: {exc}") from exc
-            # 自动回退到 Mock
-            brain_state = build_mock_brain_state(
-                chat_log=req.chat_log,
-                user_preference=req.user_preference,
-                cpp_features=cpp_features,
-            )
-            brain_state.setdefault("meta", {})
-            brain_state["meta"]["model_mode"] = "mock_fallback"  # 标记为回退模式
-            brain_state["meta"]["model_error"] = str(exc)  # 记录原始错误
+    brain_state = _sanitize_brain_state_text(brain_state)
+    if not isinstance(brain_state, dict):
+        raise HTTPException(status_code=500, detail="Invalid brain_state generated")
 
-    # 4. 保存到本地文件系统（backend/data/<brain_id>.json）
+    meta = _ensure_meta_dict(brain_state)
+    meta.setdefault("learn_count", 0)
     brain_id = save_brain_state(brain_state)
-    # 5. 返回生成的大脑 ID 和完整状态
+
+    _save_chat_import_safely(
+        mode="hatch",
+        brain_id=brain_id,
+        chat_log=req.chat_log,
+        relationship_context=req.relationship_context,
+        user_preference=req.user_preference,
+        goal=req.hatch_goal,
+    )
+
     return BrainStateResponse(brain_id=brain_id, brain_state=brain_state)
 
 
 @app.post("/api/v1/learn", response_model=LearnResponse)
 def learn(req: LearnRequest) -> LearnResponse:
     """
-    增量学习端点：对已有大脑持续喂养新聊天数据，更新语言模型与成长里程碑
-    
+    增量学习：对已有大脑持续喂养新聊天数据，更新语言模型与成长里程碑。
+
     流程：
-    1. 加载已有的 brain_state（按 brain_id）
+    1. 加载已有 brain_state
     2. 提取新聊天记录的文本特征
-    3. 合并口癖列表（新旧数据去重）
-    4. 推进里程碑状态
-    5. 保存更新
+    3. 合并口癖列表（去重，最多保留 12 个）
+    4. 按关键词累计命中驱动里程碑解锁
+    5. 保存更新，写入数据库
     """
-    # 1. 从本地存储加载该大脑
     existing = load_brain_state(req.brain_id)
     if not existing:
         raise HTTPException(status_code=404, detail="brain_id not found")
 
-    # 2. 提取新记录的特征
     cpp_features = extract_features(req.chat_log, mode="learn")
     brain_state = existing["brain_state"]
+    sanitized_existing = _sanitize_brain_state_text(brain_state)
+    if isinstance(sanitized_existing, dict):
+        brain_state = sanitized_existing
 
-    # 3. 增量更新口癖：合并旧口癖和新抽取的高频短语，去重，保留最多 12 个
+    # 合并口癖（新旧去重，最多保留 12 个）
     catchphrases = brain_state.get("language_model", {}).get("catchphrases", [])
     new_phrases = cpp_features.get("high_freq_phrases", [])
-    merged = list(dict.fromkeys(catchphrases + new_phrases))[:12]  # 去重并切割
+    merged = list(dict.fromkeys(catchphrases + new_phrases))[:12]
     brain_state["language_model"]["catchphrases"] = merged
 
-    # 4. 推进里程碑：如果有多个里程碑，将第二个设为"进行中"状态
+    meta = _ensure_meta_dict(brain_state)
+    meta["learn_count"] = _safe_int(meta.get("learn_count"), 0) + 1
+
+    # 累积关键词命中次数，驱动里程碑解锁（里程碑由命中次数触发，而非学习次数）
+    keyword_counts = _ensure_counter_dict(meta, "keyword_counts")
+
+    milestone_rules = {
+        "M2": {
+            "keywords": ["我在", "抱抱", "辛苦了", "别怕", "陪你", "安慰"],
+            "threshold": 3,
+        },
+        "M3": {
+            "keywords": ["喜欢", "偏好", "希望", "想要", "不要", "称呼"],
+            "threshold": 4,
+        },
+        "M4": {
+            "keywords": ["你在吗", "最近怎么样", "今天还好吗", "想和你聊聊", "要不要聊聊", "我来找你"],
+            "threshold": 3,
+        },
+    }
+
+    # A. 统计规则关键词命中次数
+    for rule in milestone_rules.values():
+        for kw in rule["keywords"]:
+            hits = req.chat_log.count(kw)
+            if hits > 0:
+                keyword_counts[kw] = _safe_int(keyword_counts.get(kw), 0) + hits
+
+    # B. C++ 高频短语也计为关键词证据
+    for phrase in new_phrases:
+        if isinstance(phrase, str) and phrase:
+            keyword_counts[phrase] = _safe_int(keyword_counts.get(phrase), 0) + 1
+
     milestones = brain_state.get("growth_model", {}).get("milestones", [])
-    if len(milestones) > 1:
-        milestones[1]["status"] = "in_progress"
+    # 兼容旧 brain：若缺少 M4 则自动补齐
+    if isinstance(milestones, list) and not any(
+        isinstance(item, dict) and item.get("milestone_id") == "M4" for item in milestones
+    ):
+        milestones.append(
+            {
+                "milestone_id": "M4",
+                "name": "第一次主动发起话题",
+                "unlock_condition": "主动发起相关关键词累计命中达到 3 次",
+                "expected_behavior": "在轻度沉默场景下，主动发出简短探问",
+                "status": "locked",
+            }
+        )
 
-    # 5. 记录本次学习元数据
-    brain_state.setdefault("meta", {})["last_learn_mode"] = "mock"  # 当前为 Mock 模式，未来升级为真实 LLM
-    brain_state["meta"]["last_cpp_features"] = cpp_features
+    for milestone in milestones:
+        milestone_id = milestone.get("milestone_id")
+        rule = milestone_rules.get(milestone_id)
+        if not rule:
+            continue
 
-    # 6. 保存到本地
+        total_hits = sum(_safe_int(keyword_counts.get(kw), 0) for kw in rule["keywords"])
+        threshold = _safe_int(rule.get("threshold"), 1)
+        if total_hits >= threshold:
+            milestone["status"] = "unlocked"
+        elif total_hits > 0:
+            milestone["status"] = "in_progress"
+        else:
+            milestone["status"] = "locked"
+
+        meta[f"{milestone_id.lower()}_keyword_hits"] = total_hits
+        meta[f"remaining_keywords_for_{milestone_id.lower()}"] = max(0, threshold - total_hits)
+
+    meta["last_cpp_features"] = cpp_features
+
     update_brain_state(req.brain_id, brain_state)
 
-    # 7. 返回变更摘要和完整新状态
+    _save_chat_import_safely(
+        mode="learn",
+        brain_id=req.brain_id,
+        chat_log=req.chat_log,
+        goal=req.learn_goal,
+    )
+
     return LearnResponse(
         brain_id=req.brain_id,
-        updated_fields=["language_model.catchphrases", "growth_model.milestones"],
+        updated_fields=[
+            "language_model.catchphrases",
+            "growth_model.milestones",
+            "meta.learn_count",
+            "meta.keyword_counts",
+        ],
         brain_state=brain_state,
     )
 
 
 @app.get("/api/v1/brain/{brain_id}", response_model=BrainStateResponse)
 def get_brain(brain_id: str) -> BrainStateResponse:
-    """
-    读取大脑端点：按 brain_id 获取已保存的完整大脑状态
-    
-    用途：前端可按 ID 恢复之前培养的宠物大脑，或查看学习后的变化
-    """
-    # 从本地存储加载指定 brain_id 的数据
+    """读取大脑：按 brain_id 获取已保存的完整大脑状态。"""
     existing = load_brain_state(brain_id)
     if not existing:
         raise HTTPException(status_code=404, detail="brain_id not found")
-    # 返回完整的大脑状态
-    return BrainStateResponse(brain_id=brain_id, brain_state=existing["brain_state"])
+    brain_state = _sanitize_brain_state_text(existing["brain_state"])
+    if not isinstance(brain_state, dict):
+        raise HTTPException(status_code=500, detail="Invalid brain_state in store")
+    return BrainStateResponse(brain_id=brain_id, brain_state=brain_state)
+
+
+@app.get("/api/v1/chat-imports", response_model=ChatImportListResponse)
+def list_chat_imports(
+    brain_id: str | None = Query(default=None),
+    mode: str | None = Query(default=None, pattern="^(hatch|learn)$"),
+    keyword: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> ChatImportListResponse:
+    """查询聊天导入记录：按 brain_id / 模式 / 关键词回溯历史导入数据。"""
+    items, total = query_chat_imports(
+        brain_id=brain_id,
+        mode=mode,
+        keyword=keyword,
+        limit=limit,
+        offset=offset,
+    )
+    return ChatImportListResponse(items=items, total=total, limit=limit, offset=offset)

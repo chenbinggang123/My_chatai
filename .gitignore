@@ -33,3 +33,10 @@ cpp/build/
 
 # Editor
 .vscode/
+# env
+backend/.env
+frontend/.env.local
+
+# env
+backend/.env
+frontend/.env.local

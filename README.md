@@ -12,7 +12,30 @@
 
 - 孵化：首次导入聊天记录，生成宠物初始大脑
 - 学习：继续导入聊天记录，增量更新大脑
-- 成长：按里程碑演进，例如“第一次开口说话”
+- 成长：按里程碑演进，支持关键词驱动解锁
+- 对话：基于 brain_state 的口癖、语气、关键词进行轻量聊天回复
+
+## 最近新增功能
+
+1. 增量学习计数持久化
+
+- 在 `meta.learn_count` 中记录累计学习次数（统计用途）。
+
+2. 里程碑关键词驱动解锁（不再按学习次数直接解锁）
+
+- M2「第一次主动安慰你」：安抚类关键词累计命中达到阈值解锁。
+- M3「第一次记住你的偏好」：偏好类关键词累计命中达到阈值解锁。
+- M4「第一次主动发起话题」：主动探问类关键词累计命中达到阈值解锁。
+- 关键词累计计数写入 `meta.keyword_counts`，并返回剩余命中数。
+
+3. 聊天栏与后端聊天接口
+
+- 新增后端接口 `POST /api/v1/chat`，根据 `tone/catchphrases/comfort_lines` 与已命中关键词生成回复。
+- 前端页面新增聊天区域，支持基于当前 `brain_id` 进行对话。
+
+4. 前端会话本地恢复
+
+- 页面会将关键状态写入 `localStorage`，刷新后可恢复输入和结果。
 
 ## 文档入口
 
@@ -29,9 +52,9 @@
 
 ## 当前开发重点
 
-1. 实现 Web 孵化页面
-2. 实现聊天记录导入（文本/文件）
-3. 打通 `/api/v1/hatch` AI 学习接口
+1. 完善关键词驱动的里程碑策略与阈值
+2. 增强聊天接口（从轻量规则版升级为更强对话能力）
+3. 打通“会话记忆 + 续聊”能力
 
 ## 本地运行
 
@@ -43,13 +66,12 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --env-file .env
 ```
 
 说明：
 
-- 默认 `USE_MOCK_MODEL=true`，不配置 OpenAI Key 也可以先跑通本地流程
-- 如果要切到真实模型，把 `backend/.env` 里的 `USE_MOCK_MODEL=false`，并填写 `OPENAI_API_KEY`
+- 需要在 `backend/.env` 中填写 `OPENAI_API_KEY`
 - 健康检查地址：`http://localhost:8000/api/v1/health`
 
 ### 2) 启动前端（Next.js）

@@ -5,7 +5,7 @@ from app.schemas import HatchRequest
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[4]
 
 
 def build_hatch_prompt(req: HatchRequest, cpp_features: dict) -> str:

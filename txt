@@ -1,0 +1,24 @@
+聊天记录的传送过程
+.txt 文件
+   ↓ FileReader.readAsText (浏览器)
+纯文本字符串 → chatLog state
+   ↓ 点击"开始孵化"
+POST /api/v1/hatch  { chat_log: "..." }
+   ↓
+C++ 特征提取（Optional）
+   ↓
+Mock / LLM 生成 brain_state
+   ↓
+保存为 backend/data/<uuid>.json
+   ↓
+返回 brain_id + brain_state → 前端展示
+
+
+
+数据传输链路
+浏览器
+ └─ 访问 localhost:3000  →  Next.js 返回 HTML/JS 页面
+ └─ 用户点击"孵化"按钮
+     └─ 前端执行 fetch()  →  发出 HTTP POST 请求到 localhost:8000
+         └─ FastAPI 处理请求  →  返回 JSON 数据
+             └─ 前端拿到 JSON  →  渲染到页面

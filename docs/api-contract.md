@@ -1,4 +1,4 @@
-# API 契约（V2：孵化与学习）
+# API 契约（V3：孵化、学习与轻量聊天）
 
 ## 1. 孵化接口
 
@@ -67,7 +67,9 @@
   "brain_id": "string",
   "updated_fields": [
     "language_model.catchphrases",
-    "growth_model.milestones"
+    "growth_model.milestones",
+    "meta.learn_count",
+    "meta.keyword_counts"
   ],
   "brain_state": {
     "brain_profile": {},
@@ -79,6 +81,12 @@
   }
 }
 ```
+
+说明：
+
+- 增量学习会累计关键词命中数到 `brain_state.meta.keyword_counts`。
+- 里程碑解锁采用“关键词阈值驱动”，不直接按学习次数解锁。
+- 常见进度字段：`m2_keyword_hits`、`m3_keyword_hits`、`m4_keyword_hits`、`remaining_keywords_for_m2` 等。
 
 ## 3. 读取大脑状态
 
@@ -101,7 +109,33 @@
 }
 ```
 
-## 4. 里程碑事件上报（预留）
+## 4. 轻量聊天接口
+
+- Method: `POST`
+- Path: `/api/v1/chat`
+- Content-Type: `application/json`
+
+请求体：
+
+```json
+{
+  "brain_id": "string, required",
+  "user_message": "string, required"
+}
+```
+
+成功响应：
+
+```json
+{
+  "brain_id": "string",
+  "reply": "string",
+  "applied_tone": ["string"],
+  "matched_keywords": ["string"]
+}
+```
+
+## 5. 里程碑事件上报（预留）
 
 - Method: `POST`
 - Path: `/api/v1/milestone/trigger`
@@ -116,7 +150,7 @@
 }
 ```
 
-## 5. C++ 特征接口（Python 内部调用）
+## 6. C++ 特征接口（Python 内部调用）
 
 建议先使用 JSON stdin/stdout，后续可切 pybind11。
 
@@ -144,7 +178,7 @@
 }
 ```
 
-## 6. 状态码建议
+## 7. 状态码建议
 
 - `200` 成功
 - `400` 参数错误
