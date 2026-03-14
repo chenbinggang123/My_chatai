@@ -33,10 +33,28 @@ cpp/build/
 
 # Editor
 .vscode/
-# env
-backend/.env
-frontend/.env.local
 
-# env
-backend/.env
+# Frontend specific (merged from frontend/.gitignore)
+frontend/node_modules/
+frontend/.pnp
+frontend/.pnp.*
+frontend/.yarn/*
+!frontend/.yarn/patches
+!frontend/.yarn/plugins
+!frontend/.yarn/releases
+!frontend/.yarn/versions
+frontend/coverage/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/*.pem
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.pnpm-debug.log*
 frontend/.env.local
+frontend/.env*
+!frontend/.env.example
+frontend/.vercel/
+frontend/*.tsbuildinfo
+frontend/next-env.d.ts
