@@ -2,7 +2,7 @@ import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
-from app.services.storage.store import DATA_DIR
+from app.services.storage.db import DATA_DIR, DATABASE_URL
 
 DB_PATH = Path(DATA_DIR) / "chat_imports.db"
 
@@ -14,6 +14,38 @@ def _get_conn() -> sqlite3.Connection:
 
 
 def init_chat_import_store() -> None:
+    if DATABASE_URL:
+        try:
+            import psycopg
+        except ImportError as exc:
+            raise RuntimeError("DATABASE_URL is set but psycopg is not installed") from exc
+
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS chat_imports (
+                        import_id TEXT PRIMARY KEY,
+                        brain_id TEXT,
+                        mode TEXT NOT NULL,
+                        chat_log TEXT NOT NULL,
+                        relationship_context TEXT,
+                        user_preference TEXT,
+                        goal TEXT,
+                        chat_length INTEGER NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_chat_imports_brain_id ON chat_imports(brain_id)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_chat_imports_created_at ON chat_imports(created_at DESC)"
+                )
+            conn.commit()
+        return
+
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with _get_conn() as conn:
         conn.execute(
@@ -49,6 +81,37 @@ def save_chat_import(
     goal: str | None = None,
 ) -> str:
     import_id = str(uuid4())
+
+    if DATABASE_URL:
+        try:
+            import psycopg
+        except ImportError as exc:
+            raise RuntimeError("DATABASE_URL is set but psycopg is not installed") from exc
+
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO chat_imports (
+                        import_id, brain_id, mode, chat_log, relationship_context,
+                        user_preference, goal, chat_length
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        import_id,
+                        brain_id,
+                        mode,
+                        chat_log,
+                        relationship_context,
+                        user_preference,
+                        goal,
+                        len(chat_log),
+                    ),
+                )
+            conn.commit()
+        return import_id
+
     with _get_conn() as conn:
         conn.execute(
             """
@@ -74,6 +137,27 @@ def save_chat_import(
 
 def get_recent_chat_logs(brain_id: str, limit: int = 3) -> list[str]:
     """返回该 brain_id 最近几条原始聊天记录，用于喂给 AI 作为上下文。"""
+    if DATABASE_URL:
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError("DATABASE_URL is set but psycopg is not installed") from exc
+
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT chat_log FROM chat_imports
+                    WHERE brain_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (brain_id, max(1, min(limit, 10))),
+                )
+                rows = cur.fetchall()
+        return [row["chat_log"] for row in rows]
+
     with _get_conn() as conn:
         rows = conn.execute(
             """
@@ -97,18 +181,55 @@ def query_chat_imports(
 ) -> tuple[list[dict], int]:
     where_parts: list[str] = []
     params: list[object] = []
+    placeholder = "%s" if DATABASE_URL else "?"
 
     if brain_id:
-        where_parts.append("brain_id = ?")
+        where_parts.append(f"brain_id = {placeholder}")
         params.append(brain_id)
     if mode:
-        where_parts.append("mode = ?")
+        where_parts.append(f"mode = {placeholder}")
         params.append(mode)
     if keyword:
-        where_parts.append("chat_log LIKE ?")
+        where_parts.append(f"chat_log LIKE {placeholder}")
         params.append(f"%{keyword}%")
 
     where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+    if DATABASE_URL:
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError("DATABASE_URL is set but psycopg is not installed") from exc
+
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT COUNT(*) AS c FROM chat_imports {where_sql}",
+                    params,
+                )
+                total = cur.fetchone()["c"]
+
+                cur.execute(
+                    f"""
+                    SELECT
+                        import_id,
+                        brain_id,
+                        mode,
+                        chat_length,
+                        created_at,
+                        substr(chat_log, 1, 120) AS excerpt
+                    FROM chat_imports
+                    {where_sql}
+                    ORDER BY created_at DESC
+                    LIMIT {placeholder} OFFSET {placeholder}
+                    """,
+                    [*params, max(1, min(limit, 200)), max(0, offset)],
+                )
+                rows = cur.fetchall()
+
+        items = [dict(row) for row in rows]
+        return items, int(total)
 
     with _get_conn() as conn:
         total = conn.execute(
@@ -135,3 +256,22 @@ def query_chat_imports(
 
     items = [dict(row) for row in rows]
     return items, int(total)
+
+
+def delete_chat_imports_by_brain_id(brain_id: str) -> int:
+    if DATABASE_URL:
+        try:
+            import psycopg
+        except ImportError as exc:
+            raise RuntimeError("DATABASE_URL is set but psycopg is not installed") from exc
+
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM chat_imports WHERE brain_id = %s", (brain_id,))
+                deleted = int(cur.rowcount)
+            conn.commit()
+        return deleted
+
+    with _get_conn() as conn:
+        cur = conn.execute("DELETE FROM chat_imports WHERE brain_id = ?", (brain_id,))
+    return int(cur.rowcount)

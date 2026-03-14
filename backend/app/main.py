@@ -27,9 +27,20 @@ from app.services.cpp_bridge import extract_features
 from app.services.llm.model_client import generate_brain_state
 from app.services.llm.prompt_builder import build_hatch_prompt
 from app.services.llm.schema_validator import BrainStateValidationError, validate_brain_state
-from app.services.storage.chat_import_store import init_chat_import_store, query_chat_imports, save_chat_import
-from app.services.storage.conversation_store import init_conversation_store
-from app.services.storage.store import init_brain_store, load_brain_state, save_brain_state, update_brain_state
+from app.services.storage.brain_store import (
+    delete_brain_state,
+    init_brain_store,
+    load_brain_state,
+    save_brain_state,
+    update_brain_state,
+)
+from app.services.storage.chat_import_store import (
+    delete_chat_imports_by_brain_id,
+    init_chat_import_store,
+    query_chat_imports,
+    save_chat_import,
+)
+from app.services.storage.conversation_store import delete_conversation_messages, init_conversation_store
 
 # ---------------------------------------------------------------------------
 # 应用初始化
@@ -311,3 +322,22 @@ def list_chat_imports(
         offset=offset,
     )
     return ChatImportListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@app.delete("/api/v1/brain/{brain_id}")
+def delete_brain(brain_id: str) -> dict[str, object]:
+    """删除宠物：删除 brain_state 以及其关联的导入记录和对话记录。"""
+    existing = load_brain_state(brain_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="brain_id not found")
+
+    deleted_chat_imports = delete_chat_imports_by_brain_id(brain_id)
+    deleted_conversation_messages = delete_conversation_messages(brain_id)
+    deleted_brain = delete_brain_state(brain_id)
+
+    return {
+        "brain_id": brain_id,
+        "deleted_brain": deleted_brain,
+        "deleted_chat_imports": deleted_chat_imports,
+        "deleted_conversation_messages": deleted_conversation_messages,
+    }
