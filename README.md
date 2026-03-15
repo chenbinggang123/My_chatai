@@ -1,3 +1,35 @@
+# 用户使用指南
+
+1. 访问地址
+
+	请在浏览器中访问：[https://my-chatai.pages.dev/](https://my-chatai.pages.dev/)
+
+2. 首次上传聊天记录注意事项
+
+	由于服务器长时间未使用会进入休眠状态，**第一次上传聊天记录时可能会失败**。此时请**再次上传一次**，即可正常使用。
+
+3. 聊天对话功能
+
+	聊天记录上传成功后，页面会出现聊天对话框。此时即可与 AI 进行对话。
+
+4. 常见问题
+
+	- 首次上传失败：请重试一次。
+	- 若遇到其他问题，请刷新页面或稍后重试。
+
+欢迎体验并反馈问题！
+
+## 示例截图
+
+### 孵化台界面
+
+![孵化台界面](docs/hatchlab.png)
+
+### 宠物对话界面
+
+![宠物对话界面](docs/chat.png)
+
+> 备注：以下内容主要面向开源开发者，普通用户可忽略。
 # My_chatai
 
 一个“可成长桌面宠物”项目，当前先做 Web 孵化台。
@@ -60,6 +92,7 @@
 
 ### 1) 启动后端（FastAPI）
 
+
 ```bash
 cd backend
 python3 -m venv .venv
@@ -89,48 +122,3 @@ cd cpp
 cmake -S . -B build
 cmake --build build
 ```
-
-## 数据库部署（Neon PostgreSQL）
-
-当前后端已支持两种模式：
-
-- 未设置 `DATABASE_URL`：使用本地 SQLite（`backend/data/*.db`）
-- 设置 `DATABASE_URL`：自动切换到 PostgreSQL（推荐线上）
-
-### 1) 创建 Neon 数据库
-
-1. 在 Neon 创建 Project 和数据库
-2. 复制连接串（`postgresql://...`）
-
-### 2) 配置 Render 环境变量
-
-在 Render 后端服务添加：
-
-- `DATABASE_URL` = 你的 Neon 连接串
-
-保存后重新部署后端。
-
-### 3) 迁移已有 SQLite 数据（可选）
-
-如果你本地已有历史数据，运行：
-
-```bash
-cd backend
-source .venv/bin/activate
-DATABASE_URL='postgresql://<user>:<password>@<host>/<db>?sslmode=require' \
-python scripts/migrate_sqlite_to_postgres.py
-```
-
-脚本会迁移以下三类数据：
-
-- `brain_states`
-- `chat_imports`
-- `conversation_messages`
-
-### 4) 验证
-
-部署后访问健康检查：
-
-`https://<你的-render-域名>/api/v1/health`
-
-并在前端发一条新消息，确认数据可持续保存。
