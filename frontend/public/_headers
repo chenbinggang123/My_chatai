@@ -1,0 +1,14 @@
+# Static assets - cache for 1 year (content-hashed filenames)
+/_next/static/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Images and icons
+/favicon.ico
+  Cache-Control: public, max-age=86400
+
+/*.svg
+  Cache-Control: public, max-age=86400
+
+# HTML pages - always revalidate
+/*
+  Cache-Control: public, max-age=0, must-revalidate

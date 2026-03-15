@@ -1,6 +1,29 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+const STORAGE_KEY_WORKSPACES = "petlab_workspaces";
+const STORAGE_KEY_ACTIVE_ID = "petlab_active_id";
+
+function loadFromStorage<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === null) return fallback;
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveToStorage<T>(key: string, value: T): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore quota / security errors
+  }
+}
 
 export type HatchResponse = {
   brain_id: string;
@@ -70,8 +93,33 @@ function resetPetWorkspace(pet: PetWorkspace, index: number): PetWorkspace {
 }
 
 export function usePetLab(apiBase: string) {
-  const [petWorkspaces, setPetWorkspaces] = useState<PetWorkspace[]>(() => [createEmptyPetWorkspace(1)]);
-  const [activePetId, setActivePetId] = useState("");
+  const [petWorkspaces, setPetWorkspaces] = useState<PetWorkspace[]>(() => {
+    const saved = loadFromStorage<PetWorkspace[]>(STORAGE_KEY_WORKSPACES, []);
+    if (saved.length > 0) {
+      // Reset transient fields that should not be restored
+      return saved.map((pet) => ({ ...pet, loading: false, chatSending: false }));
+    }
+    return [createEmptyPetWorkspace(1)];
+  });
+  const [activePetId, setActivePetId] = useState(() =>
+    loadFromStorage<string>(STORAGE_KEY_ACTIVE_ID, "")
+  );
+
+  // Persist workspaces to localStorage (skip transient fields)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveToStorage(STORAGE_KEY_WORKSPACES, petWorkspaces);
+    }, 500);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [petWorkspaces]);
+
+  useEffect(() => {
+    if (activePetId) saveToStorage(STORAGE_KEY_ACTIVE_ID, activePetId);
+  }, [activePetId]);
 
   const activePet = useMemo(() => petWorkspaces.find((pet) => pet.id === activePetId), [petWorkspaces, activePetId]);
 
